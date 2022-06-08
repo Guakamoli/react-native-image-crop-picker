@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -14,11 +15,14 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.text.TextUtils;
 import android.util.Base64;
+import android.util.Log;
 import android.webkit.MimeTypeMap;
 
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.FileProvider;
+import androidx.documentfile.provider.DocumentFile;
 
 import com.facebook.react.bridge.ActivityEventListener;
 import com.facebook.react.bridge.Callback;
@@ -39,8 +43,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -520,8 +526,7 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
             retriever.setDataSource(path);
 
             return Long.parseLong(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION));
-        }
-        catch(Exception e) {
+        } catch (Exception e) {
             return -1L;
         }
     }
@@ -657,7 +662,7 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
         }
     }
 
-    private void startCropping(final Activity activity, final Uri uri) {
+    private void startCropping(final Activity activity, Uri uri) {
         UCrop.Options options = new UCrop.Options();
         options.setCompressionFormat(Bitmap.CompressFormat.JPEG);
         options.setCompressionQuality(100);
@@ -684,6 +689,32 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
             configureCropperColors(options);
         }
 
+        try {
+            BitmapFactory.Options optionsType = new BitmapFactory.Options();
+            optionsType.inJustDecodeBounds = true;
+            InputStream inputStream = reactContext.getApplicationContext().getContentResolver().openInputStream(uri);
+            Bitmap bitmap = BitmapFactory.decodeStream(inputStream, null, optionsType);
+            optionsType.inSampleSize = 1;
+            optionsType.inJustDecodeBounds = false;
+            String fileType = optionsType.outMimeType;
+            Log.e("AAA", "fileType：" + fileType);
+            if (!fileType.contains("png") && !fileType.contains("jpg") && !fileType.contains("jpeg")) {
+                InputStream saveInputStream = reactContext.getApplicationContext().getContentResolver().openInputStream(uri);
+                Bitmap outBitmap = BitmapFactory.decodeStream(saveInputStream);
+                String saveFilePath = saveImageToJPEG(reactContext.getApplicationContext(), outBitmap);
+                if (!TextUtils.isEmpty(saveFilePath)) {
+                    uri = Uri.parse("file://" + saveFilePath);
+                }
+                saveInputStream.close();
+            }
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+            inputStream.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
         UCrop uCrop = UCrop
                 .of(uri, Uri.fromFile(new File(this.getTmpDir(activity), UUID.randomUUID().toString() + ".jpg")))
                 .withOptions(options);
@@ -694,6 +725,55 @@ class PickerModule extends ReactContextBaseJavaModule implements ActivityEventLi
 
         uCrop.start(activity);
     }
+
+    private String saveImageToJPEG(Context context, Bitmap bitmap) {
+        String outputFileName = "img_cache_" + System.nanoTime() + ".jpg";
+        String outputPath = getDiskCachePath(context) + File.separator + "media/cropPicker/image" + File.separator + outputFileName;
+
+        File outputFile = new File(outputPath);
+        //创建输出目录
+        createDir(outputFile.getParent());
+        try {
+            FileOutputStream fileOutStream = new FileOutputStream(outputFile);
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fileOutStream); //把位图输出到指定的文件中
+            fileOutStream.flush();
+            fileOutStream.close();
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+            return outputPath;
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    /**
+     * 创建文件夹
+     */
+    public static File createDir(String sdcardDir) {
+        File file = new File(sdcardDir);
+        if (!file.exists()) {
+            boolean isMkdirs = file.mkdirs();
+            if (isMkdirs) {
+                return file;
+            } else {
+                return null;
+            }
+        }
+        return file;
+    }
+
+    public static String getDiskCachePath(Context context) {
+        if (Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState()) || !Environment.isExternalStorageRemovable()) {
+            File exFile = context.getExternalCacheDir();
+            if (exFile != null) {
+                return exFile.getPath();
+            }
+        }
+        return context.getCacheDir().getPath();
+    }
+
 
     private void imagePickerResult(Activity activity, final int requestCode, final int resultCode, final Intent data) {
         if (resultCode == Activity.RESULT_CANCELED) {
